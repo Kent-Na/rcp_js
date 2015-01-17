@@ -65,7 +65,7 @@ var rcpJS = {};// As namespace
 					console.log("fatal:bad length encoding");
 					return;//fatal error
 				}
-				length = view.getUint16(2, true);
+				length = view.getUint16(2, false);
 				ptr += 2;
 			}
 			else if (length == 0xff){
@@ -73,7 +73,7 @@ var rcpJS = {};// As namespace
 					console.log("fatal:bad length encoding");
 					return;//fatal error
 				}
-				length = view.getUint64(2, true);
+				length = view.getUint64(2, false);
 				ptr += 8;
 			}
 
@@ -126,12 +126,12 @@ var rcpJS = {};// As namespace
 			}
 			else if (l<0x10000){
 				dataView.setUint8(offset, 0xFE);
-				dataView.setUint16(offset, l, true);
+				dataView.setUint16(offset, l, false);
 			}
 			else if (l<(1<<32)){
 				dataView.setUint8(offset, 0xFF);
-				dataView.setUint32(offset+1, 0, true);
-				dataView.setUint32(offset+5, l, true);
+				dataView.setUint32(offset+1, 0, false);
+				dataView.setUint32(offset+5, l, false);
 			}
 		}
 
