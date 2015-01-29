@@ -126,7 +126,7 @@ var rcpJS = {};// As namespace
 			}
 			else if (l<0x10000){
 				dataView.setUint8(offset, 0xFE);
-				dataView.setUint16(offset, l, false);
+				dataView.setUint16(offset+1, l, false);
 			}
 			else if (l<(1<<32)){
 				dataView.setUint8(offset, 0xFF);
