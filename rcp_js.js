@@ -24,9 +24,6 @@ var rcpJS = {};// As namespace
 		ctx = NewContext(ctx);
 		ctx.local_site = {};
 		ctx.on_init_local_site(ctx.local_site);
-		ctx.did_replace_text = function(b, e, d){
-			console.log(ctx.local_site.state.contents);
-		}
 		con.context = ctx;
 		//--end
 
@@ -212,6 +209,9 @@ var rcpJS = {};// As namespace
 			view.setUint8(0, 0x00);
 			view.setUint8(1, 0x00);
 			that.websock.send(buffer);
+		}
+		con.ping = function(){
+			con.sendCommand(0x0A, new ArrayBuffer(0));
 		}
 
 		//con.sendContents = function(str){
