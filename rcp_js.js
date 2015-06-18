@@ -28,21 +28,21 @@ var rcpJS = {};// As namespace
 		//--end
 
 		var wsOnopen= function(event){
-			con.onopen();
-
 			//--temp context impl
 			var site = {};
 			site.send = function(cmd){
 				//that.websock.send(cmd);
-				con.sendCommand(0x81, cmd);
+				con.sendCommand(0x01, cmd);
 			}
 			site.is_slave = false;
 			ctx.on_init_neighbor_site(site);
 			ctx.neighbors.push(site);
 			//--end
+
+			con.onopen();
 		}
 		var wsOnerror= function(event){
-			con.onerror();
+			con.onerror(event);
 		}
 		var wsOnclose= function(event){
 			con.onclose(event);
@@ -51,10 +51,15 @@ var rcpJS = {};// As namespace
 			var data = event.data;
 			var view = new DataView(data);
 			var ptr = 0;
-			var opcode = view.getUint8(0);
+			var pipe_id = view.getUint8(ptr);
 			ptr += 1;
 
-			var length = view.getUint8(1);
+			if (pipe_id & 0xC0 == 0x80){
+				pipe_id = ((pipe_id&0x3f)<<6)|(view.getUint8(ptr));
+				ptr += 1;
+			}
+
+			var length = view.getUint8(ptr);
 			ptr += 1;
 
 			if (length == 0xfe){
@@ -62,7 +67,7 @@ var rcpJS = {};// As namespace
 					console.log("fatal:bad length encoding");
 					return;//fatal error
 				}
-				length = view.getUint16(2, false);
+				length = view.getUint16(ptr, false);
 				ptr += 2;
 			}
 			else if (length == 0xff){
@@ -70,7 +75,7 @@ var rcpJS = {};// As namespace
 					console.log("fatal:bad length encoding");
 					return;//fatal error
 				}
-				length = view.getUint64(2, false);
+				length = view.getUint64(ptr, false);
 				ptr += 8;
 			}
 
@@ -132,16 +137,33 @@ var rcpJS = {};// As namespace
 			}
 		}
 
-		con.sendCommand = function(command_id, payload){
-			var header_length = 1 + lengthOfLength(payload.byteLength);
+		var pipeIDLength = function(pipe_id){
+			if (pipe_id<0x40) return 1;
+			else return 2;
+		}
+		var setPipeID = function(dataView, offset, pipe_id){
+			if (pipe_id<0x40){
+				dataView.setUint8(offset, pipe_id);
+			}
+			else if (pipe_id<0x4000){
+				dataView.setUint16(offset, pipe_id+0x8000, false);
+			}
+		}
+
+		con.sendCommand = function(pipe_id, payload){
+			var pipe_id_length = pipeIDLength(pipe_id);
+			var length_length = lengthOfLength(payload.byteLength);
+			var header_length = pipe_id_length+length_length;
 			var buffer = new ArrayBuffer(header_length+payload.byteLength);
 			var view = new DataView(buffer);
 
 			//command id
-			view.setUint8(0, command_id);
+			//view.setUint8(0, command_id);
 
+			setPipeID(view, 0, pipe_id);
+			
 			//command length
-			setLengthOfLength(view, 1, payload.byteLength);
+			setLengthOfLength(view, pipe_id_length, payload.byteLength);
 
 			memcpy(view, header_length, new Uint8Array(payload));
 
@@ -204,14 +226,31 @@ var rcpJS = {};// As namespace
 		
 //for debug
 		con.sendOpen = function(str){
-			var buffer = new ArrayBuffer(2);
+			var buffer = new ArrayBuffer(17);
 			var view = new DataView(buffer);
-			view.setUint8(0, 0x00);
-			view.setUint8(1, 0x00);
-			that.websock.send(buffer);
+			view.setUint8(0, 0x28);
+			view.setUint8(1, 0x58);
+			view.setUint8(2, 0xD2);
+			view.setUint8(3, 0x3E);
+			view.setUint8(4, 0x23);
+			view.setUint8(5, 0x3D);
+			view.setUint8(6, 0x57);
+			view.setUint8(7, 0x41);
+			view.setUint8(8, 0xF6);
+			view.setUint8(9, 0xB9);
+			view.setUint8(10, 0x73);
+			view.setUint8(11, 0x34);
+			view.setUint8(12, 0xB2);
+			view.setUint8(13, 0x62);
+			view.setUint8(14, 0x5D);
+			view.setUint8(15, 0xA4);
+			view.setUint8(16, 0xB6);
+
+			con.sendCommand(0x00, buffer);
+			//that.websock.send(buffer);
 		}
 		con.ping = function(){
-			con.sendCommand(0x0A, new ArrayBuffer(0));
+			//con.sendCommand(0x0A, new ArrayBuffer(0));
 		}
 
 		//con.sendContents = function(str){
