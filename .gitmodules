@@ -1,0 +1,3 @@
+[submodule "bsp"]
+	path = bsp
+	url = www.tuna-cat.com:~/prog/rcp_beta_two/bsp

@@ -1,3 +1,4 @@
+"use strict";
 //rcp_js the rcp client for java script.
 //by Kent Nakajima.
 
@@ -27,6 +28,8 @@ var rcpJS = {};// As namespace
 		con.context = ctx;
 		//--end
 
+		var reader = BSP.reader();
+
 		var wsOnopen= function(event){
 			//--temp context impl
 			var site = {};
@@ -39,55 +42,198 @@ var rcpJS = {};// As namespace
 			ctx.neighbors.push(site);
 			//--end
 
+			reader.set_next_procedure(f_0);
+
+			//send open frame.
+			var open = new Uint8Array(256);
+			this.send(open);
+
+			//send login user
+			var login_user = {
+				//tag:command.tag.login_user,
+				tag:rcp_command.command_tag.login_user_request,
+				body:{
+					user_name:"testuser",
+					domain:"www.tuna-cat.com",
+					plain_password:"testpass"
+				}
+			};
+			encode_and_send_command(login_user, this);
+
+			var login_context = {
+				tag:rcp_command.command_tag.login_context_request,
+				body:{
+					context_id:"58D23E23-3D57-41F6-B973-34B2625DA4B6"
+					//context_id:"D3F66A72-0631-4955-A9CD-4D5BCD86E77D"
+			    }
+			}
+			encode_and_send_command(login_context, this);
+
 			con.onopen();
 		}
+
+		con.force_store = function(){
+			var command = {
+				tag:rcp_command.command_tag.force_store,
+				body:{
+					context_id:"58D23E23-3D57-41F6-B973-34B2625DA4B6"
+			    }
+			}
+			encode_and_send_command(command, that.websock);
+
+			var command = {
+				tag:rcp_command.command_tag.force_store,
+				body:{
+					context_id:"D3F66A72-0631-4955-A9CD-4D5BCD86E77D"
+			    }
+			}
+			encode_and_send_command(command, that.websock);
+		}
+
+		con.create_context = function(){
+			var command = {
+				tag:rcp_command.command_tag.create_context_request,
+				body:{
+					driver:"json.driver.tuna-cat.com"
+			    }
+			}
+			encode_and_send_command(command, that.websock);
+		}
+		con.ping = function(){
+			//doto:implement this.
+		}
+
 		var wsOnerror= function(event){
 			con.onerror(event);
 		}
 		var wsOnclose= function(event){
 			con.onclose(event);
 		}
+
+		var context_for_pipe_id = function(pipe_id){
+			return ctx;
+		}
+		var site_for_pipe_id = function(pipe_id){
+			return ctx.neighbors[0];
+		}
+		var encode_and_send_command = function(command, ws){
+			var state_header = {}
+			var state_payload = {}
+			var s_payload = rcp_command.sizeof_command(
+					command, state_payload);
+			var frame_header = {
+				payload_length : s_payload,
+				pipe_id : 0,
+			};
+			var s_header = rcp_command.sizeof_frame_header(
+					frame_header, state_header);
+			var output_buffer = new ArrayBuffer(s_header+s_payload);
+			var output = new DataView(output_buffer);
+			rcp_command.frame_header_write(
+					frame_header, state_header, output, 0);
+			rcp_command.command_write(
+					command, state_payload, output, s_header);
+			ws.send(output);
+		}
+		con.sendCommand = function(pipe_id, payload){
+			var state_header = {}
+			var s_payload = payload.byteLength;
+
+			var frame_header = {
+				payload_length : s_payload,
+				pipe_id : pipe_id,
+			};
+			var s_header = rcp_command.sizeof_frame_header(
+					frame_header, state_header);
+			var output_buffer = new ArrayBuffer(s_header+s_payload);
+			var output = new DataView(output_buffer);
+			rcp_command.frame_header_write(
+					frame_header, state_header, output, 0);
+			BSP.memcpy(payload, 0, output, s_header, s_payload);
+			that.websock.send(output);
+		}
+
+		//Reader procedures
+		var f_0 = function(reader){
+			var input = reader.input();
+			//var size = 256;
+			//if (!input.is_ready(size)){
+				//reader.set_require_more_data();
+				//return
+			//}
+			//var open_f = input.getArrayBuffer(size);
+			reader.set_next_procedure(f_header_push);
+		}
+		var f_header_push = function(reader){
+			var header = rcp_command.frame_header_construct();
+			reader.push_stack(header, null);
+			reader.push_stack(header, f_header_pop);
+			reader.set_next_procedure(rcp_command.frame_header_reader);
+		}
+		var f_header_pop = function(reader){
+			var header = reader.output();
+			console.log(reader.output());
+			reader.pop_stack();
+			if (header.pipe_id == 0){
+				reader.set_next_procedure(f_main_push);
+			}
+			else{
+				var ctx = context_for_pipe_id(header.pipe_id);
+				if (ctx !== null){
+					reader.set_next_procedure(
+							f_context_frame(
+								header.pipe_id, 
+								header.payload_length));
+				}
+				else{
+					reader.set_next_procedure(
+							f_void_frame(
+								header.payload_length));
+				}
+			}
+		}
+		var f_void_frame = function(size){
+			return function(reader){
+				var input = reader.input();
+				if (!input.is_ready(size)){
+					reader.ret_require_more_data();
+					return;
+				}
+				input.getArrayBuffer(size);
+				reader.set_next_procedure(f_header_push);
+			}
+		}
+		var f_context_frame = function(pipe_id, size){
+			return function(reader){
+				var input = reader.input();
+				if (!input.is_ready(size)){
+					reader.ret_require_more_data();
+					return;
+				}
+				var frame = input.getArrayBuffer(size);
+				var site = site_for_pipe_id(pipe_id);
+				var context = context_for_pipe_id(pipe_id);
+				context.execute_command(frame, site);
+				reader.set_next_procedure(f_header_push);
+			}
+		}
+
+		var f_main_push = function(reader){
+			var command = rcp_command.command_construct();
+			reader.push_stack(command, null);
+			reader.push_stack(command, f_main_pop);
+			reader.set_next_procedure(rcp_command.command_reader);
+		}
+
+		var f_main_pop = function(reader){
+			console.log(reader.output());
+			reader.set_next_procedure(f_header_push);
+		}
+		//End of reader procedures
+
 		var wsOnBinalyMessage = function(event){
-			var data = event.data;
-			var view = new DataView(data);
-			var ptr = 0;
-			var pipe_id = view.getUint8(ptr);
-			ptr += 1;
-
-			if (pipe_id & 0xC0 == 0x80){
-				pipe_id = ((pipe_id&0x3f)<<6)|(view.getUint8(ptr));
-				ptr += 1;
-			}
-
-			var length = view.getUint8(ptr);
-			ptr += 1;
-
-			if (length == 0xfe){
-				if (data.length<0xfe){
-					console.log("fatal:bad length encoding");
-					return;//fatal error
-				}
-				length = view.getUint16(ptr, false);
-				ptr += 2;
-			}
-			else if (length == 0xff){
-				if (data.length<0x10000){
-					console.log("fatal:bad length encoding");
-					return;//fatal error
-				}
-				length = view.getUint64(ptr, false);
-				ptr += 8;
-			}
-
-			if (data.byteLength != ptr + length){
-				console.log("fatal");
-			}
-			var command = data.slice(ptr);
-			con.onmessage(command);
-
-			//--temp context impl
-			ctx.execute_command(command, ctx.neighbors[0]);
-			//--end
+			reader.push_input_data(event.data);
+			reader.process();
 		}
 		var wsOnmessage = function(event){
 			var data = event.data;
@@ -98,7 +244,6 @@ var rcpJS = {};// As namespace
 			con.onmessage(event.data);
 		}
 
-
 		con.connectToURL = function(url){
 			that.websock = new WebSocket(url);
 			that.websock.binaryType = "arraybuffer";
@@ -106,183 +251,6 @@ var rcpJS = {};// As namespace
 			that.websock.onopen= wsOnopen;
 			that.websock.onclose= wsOnclose;
 			that.websock.onerror= wsOnerror;
-		}
-
-		con.sendAsRawData = function(string){
-			that.websock.send(string);
-		}
-
-
-		var lengthOfLength = function(l){
-			if (l<0xfe)
-				return 1;
-			else if (l<0x10000)
-				return 3;
-			else
-				return 9;
-		}
-
-		var setLengthOfLength = function(dataView, offset, l){
-			if (l<0xfe){
-				dataView.setUint8(offset, l);
-			}
-			else if (l<0x10000){
-				dataView.setUint8(offset, 0xFE);
-				dataView.setUint16(offset+1, l, false);
-			}
-			else if (l<(1<<32)){
-				dataView.setUint8(offset, 0xFF);
-				dataView.setUint32(offset+1, 0, false);
-				dataView.setUint32(offset+5, l, false);
-			}
-		}
-
-		var pipeIDLength = function(pipe_id){
-			if (pipe_id<0x40) return 1;
-			else return 2;
-		}
-		var setPipeID = function(dataView, offset, pipe_id){
-			if (pipe_id<0x40){
-				dataView.setUint8(offset, pipe_id);
-			}
-			else if (pipe_id<0x4000){
-				dataView.setUint16(offset, pipe_id+0x8000, false);
-			}
-		}
-
-		con.sendCommand = function(pipe_id, payload){
-			var pipe_id_length = pipeIDLength(pipe_id);
-			var length_length = lengthOfLength(payload.byteLength);
-			var header_length = pipe_id_length+length_length;
-			var buffer = new ArrayBuffer(header_length+payload.byteLength);
-			var view = new DataView(buffer);
-
-			//command id
-			//view.setUint8(0, command_id);
-
-			setPipeID(view, 0, pipe_id);
-			
-			//command length
-			setLengthOfLength(view, pipe_id_length, payload.byteLength);
-
-			memcpy(view, header_length, new Uint8Array(payload));
-
-			that.websock.send(buffer);
-			/*
-			var encoded_str = TextEncoder("UTF8").encode("text");
-			var str_view = new Uint8Array(buffer, 2, 4);
-			var i;
-			for (i = 0; i<4; i++)
-				str_view[i] = encoded_str[i];
-			
-			that.websock.send(buffer);
-			*/
-		}
-
-		var memcpy = function(dst, dst_offset, src){
-			//dst.set(dst_offset, src);
-			for (var i = 0; i<src.length; i++){
-				dst.setUint8(dst_offset+i, src[i]);
-			}
-		}
-		var putVString = function(dataView, offset, str_buffer){
-			setLengthOfLength(dataView, offset, str_buffer.length);
-			offset += lengthOfLength(str_buffer.length);
-			//dataView.set(offset, str_buffer);
-
-			//for (var i = 0; i<str_buffer.length; i++){
-				//dataView.setUint8(offset+i, str_buffer[i]);
-			//}
-			memcpy(dataView, offset, str_buffer);
-			return offset + str_buffer.length;
-		}
-
-		con.loginUser= function(name, password){
-			var encoded_name = TextEncoder("UTF8").encode(name);
-			var encoded_password = TextEncoder("UTF8").encode(password);
-
-			var total_length = 0;
-			total_length += encoded_name.length;
-			total_length += encoded_password.length;
-			total_length += lengthOfLength(encoded_name.length);
-			total_length += lengthOfLength(encoded_password.length);
-
-			var buffer = ArrayBuffer(
-					1+lengthOfLength(total_length)+total_length);
-			var view = new DataView(buffer);
-
-			var offset = 0;
-			view.setUint8(offset, 0x14);
-			offset += 1;
-
-			setLengthOfLength(view, offset, total_length);
-			offset+= lengthOfLength(total_length);
-			
-			offset = putVString(view, offset, encoded_name);
-			offset = putVString(view, offset, encoded_password);
-			
-			that.websock.send(buffer);
-		}
-		
-//for debug
-		con.sendOpen = function(str){
-			var buffer = new ArrayBuffer(17);
-			var view = new DataView(buffer);
-			view.setUint8(0, 0x28);
-			view.setUint8(1, 0x58);
-			view.setUint8(2, 0xD2);
-			view.setUint8(3, 0x3E);
-			view.setUint8(4, 0x23);
-			view.setUint8(5, 0x3D);
-			view.setUint8(6, 0x57);
-			view.setUint8(7, 0x41);
-			view.setUint8(8, 0xF6);
-			view.setUint8(9, 0xB9);
-			view.setUint8(10, 0x73);
-			view.setUint8(11, 0x34);
-			view.setUint8(12, 0xB2);
-			view.setUint8(13, 0x62);
-			view.setUint8(14, 0x5D);
-			view.setUint8(15, 0xA4);
-			view.setUint8(16, 0xB6);
-
-			con.sendCommand(0x00, buffer);
-			//that.websock.send(buffer);
-		}
-		con.ping = function(){
-			//con.sendCommand(0x0A, new ArrayBuffer(0));
-		}
-
-		//con.sendContents = function(str){
-			//var buffer = new ArrayBuffer(8);
-			//var view = new DataView(buffer);
-			//view.setUint8(0, 0x81);
-			//view.setUint8(1, 0x06);
-			//view.setUint16(2, 0x00);
-			//view.setUint16(4, 0x00);
-			//view.setUint16(6, 0x00);
-			//that.websock.send(buffer);
-		//}
-		con.sendString= function(str){
-			var encoded_str = new TextEncoder("UTF8").encode(str);
-
-			var total_length = 0;
-			total_length += encoded_str.length;
-
-			var buffer = ArrayBuffer(
-					1+lengthOfLength(total_length)+total_length);
-			var view = new DataView(buffer);
-
-			var offset = 0;
-			view.setUint8(offset, 0x70);
-			offset += 1;
-
-			setLengthOfLength(view, offset, total_length);
-			offset+= lengthOfLength(total_length);
-
-			memcpy(view, offset, encoded_str);
-			
-			that.websock.send(buffer);
 		}
 
 		return con;
